@@ -7,3 +7,5 @@ pydantic==2.9.2
 azure-identity==1.19.0
 azure-ai-ml==1.21.0
 python-dotenv==1.0.1
+marshmallow==3.19.0
+typing-extensions>=4.6.0
