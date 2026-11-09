@@ -1,9 +1,5 @@
 import sys
-
-# 1. Remove os diretórios do agente da Azure do caminho de busca
 sys.path = [p for p in sys.path if "/agents/python" not in p]
-
-# 2. Deleta o módulo antigo pré-carregado pela Azure da memória do Python
 for mod in list(sys.modules.keys()):
     if "typing_extensions" in mod or "anyio" in mod:
         del sys.modules[mod]
@@ -11,18 +7,19 @@ for mod in list(sys.modules.keys()):
 import os
 import joblib
 import pandas as pd
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from pydantic import BaseModel
 from azure.identity import DefaultAzureCredential
 from azure.ai.ml import MLClient
 
 app = FastAPI(title="Reviu ML API")
 modelo = None
+erro_detalhado = None  # Guarda a mensagem de erro para exibir no Swagger
 
 def carregar_modelo_azure():
-    global modelo
+    global modelo, erro_detalhado
     if modelo is not None:
-        return modelo
+        return modelo, None
 
     try:
         subscription_id = os.getenv("AZURE_SUBSCRIPTION_ID")
@@ -50,18 +47,22 @@ def carregar_modelo_azure():
 
         if caminho_modelo and os.path.exists(caminho_modelo):
             modelo = joblib.load(caminho_modelo)
-            return modelo
-        return None
+            return modelo, None
+        
+        erro_detalhado = f"Arquivo .joblib nao encontrado na pasta '{model_name}'"
+        return None, erro_detalhado
 
     except Exception as e:
-        print(f"Erro ao carregar modelo do Azure ML: {e}")
-        return None
+        erro_detalhado = str(e)
+        return None, erro_detalhado
 
 @app.get("/")
 def health_check():
+    mod, err = carregar_modelo_azure()
     return {
         "status": "online",
-        "modelo_carregado": modelo is not None
+        "modelo_carregado": mod is not None,
+        "detalhe_erro": err
     }
 
 class RevisaoRequest(BaseModel):
@@ -77,12 +78,12 @@ class RevisaoRequest(BaseModel):
 
 @app.post("/prever_intervalo")
 def prever_intervalo(dados: RevisaoRequest):
-    mod = carregar_modelo_azure()
+    mod, err = carregar_modelo_azure()
     if mod is None:
-        raise HTTPException(
-            status_code=500, 
-            detail="Modelo nao carregado. Verifique as credenciais do Azure ML."
-        )
+        return {
+            "erro": "Falha ao carregar modelo",
+            "detalhe_azure_ml": err
+        }
     df = pd.DataFrame([dados.dict()])
     previsao = mod.predict(df)[0]
     return {"proximo_intervalo_dias": int(round(previsao))}
