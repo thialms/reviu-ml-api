@@ -1,3 +1,7 @@
+import sys
+# Remove a pasta de agentes legada da Azure para evitar conflitos com typing_extensions
+sys.path = [p for p in sys.path if "/agents/python" not in p]
+
 import os
 import joblib
 import pandas as pd
@@ -6,15 +10,14 @@ from pydantic import BaseModel
 from azure.identity import DefaultAzureCredential
 from azure.ai.ml import MLClient
 
-app = FastAPI(
-    title="Reviu ML API",
-    description="Microserviço de predição de revisões adaptativas"
-)
-
-# Variável global para guardar o modelo na memória
+app = FastAPI(title="Reviu ML API")
 modelo = None
 
 def carregar_modelo_azure():
+    global modelo
+    if modelo is not None:
+        return modelo
+
     try:
         subscription_id = os.getenv("AZURE_SUBSCRIPTION_ID")
         resource_group = os.getenv("AZURE_RESOURCE_GROUP", "rg-reviu-ml-api")
@@ -22,7 +25,7 @@ def carregar_modelo_azure():
         model_name = os.getenv("AZURE_MODEL_NAME", "reviu-random-forest")
         model_version = os.getenv("AZURE_MODEL_VERSION", "1")
 
-        print(f"Tentando conectar ao Azure ML: {workspace_name}...")
+        print(f"Conectando ao Azure ML Workspace: {workspace_name}...")
         credential = DefaultAzureCredential()
         ml_client = MLClient(
             credential=credential,
@@ -43,18 +46,20 @@ def carregar_modelo_azure():
 
         if caminho_modelo and os.path.exists(caminho_modelo):
             print(f"Modelo carregado com sucesso de: {caminho_modelo}")
-            return joblib.load(caminho_modelo)
+            modelo = joblib.load(caminho_modelo)
+            return modelo
         return None
 
     except Exception as e:
         print(f"Erro ao carregar modelo do Azure ML: {e}")
         return None
 
-# Carrega o modelo de forma assíncrona/protegida ao subir o servidor
-@app.on_event("startup")
-def startup_event():
-    global modelo
-    modelo = carregar_modelo_azure()
+@app.get("/")
+def health_check():
+    return {
+        "status": "online",
+        "modelo_carregado": modelo is not None
+    }
 
 class RevisaoRequest(BaseModel):
     foco_estudos: str
@@ -67,20 +72,14 @@ class RevisaoRequest(BaseModel):
     facilidade_atual: float
     nota_revisao: int
 
-@app.get("/")
-def health_check():
-    return {
-        "status": "online",
-        "modelo_carregado": modelo is not None
-    }
-
 @app.post("/prever_intervalo")
 def prever_intervalo(dados: RevisaoRequest):
-    if modelo is None:
+    mod = carregar_modelo_azure()
+    if mod is None:
         raise HTTPException(
             status_code=500, 
-            detail="Modelo não carregado. Verifique as credenciais ou logs do Azure ML."
+            detail="Modelo nao carregado. Verifique as credenciais do Azure ML."
         )
     df = pd.DataFrame([dados.dict()])
-    previsao = modelo.predict(df)[0]
-    return {"proximo_intervalo_dias": int(round(previsao))}
+    previsao = mod.predict(df)[0]
+    return {int(round(previsao))}
