@@ -1,6 +1,12 @@
 import sys
-# Remove a pasta de agentes legada da Azure para evitar conflitos com typing_extensions
+
+# 1. Remove os diretórios do agente da Azure do caminho de busca
 sys.path = [p for p in sys.path if "/agents/python" not in p]
+
+# 2. Deleta o módulo antigo pré-carregado pela Azure da memória do Python
+for mod in list(sys.modules.keys()):
+    if "typing_extensions" in mod or "anyio" in mod:
+        del sys.modules[mod]
 
 import os
 import joblib
@@ -25,7 +31,6 @@ def carregar_modelo_azure():
         model_name = os.getenv("AZURE_MODEL_NAME", "reviu-random-forest")
         model_version = os.getenv("AZURE_MODEL_VERSION", "1")
 
-        print(f"Conectando ao Azure ML Workspace: {workspace_name}...")
         credential = DefaultAzureCredential()
         ml_client = MLClient(
             credential=credential,
@@ -34,7 +39,6 @@ def carregar_modelo_azure():
             workspace_name=workspace_name
         )
 
-        print(f"Baixando modelo '{model_name}' v{model_version}...")
         ml_client.models.download(name=model_name, version=model_version, download_path=".")
 
         caminho_modelo = None
@@ -45,7 +49,6 @@ def carregar_modelo_azure():
                     break
 
         if caminho_modelo and os.path.exists(caminho_modelo):
-            print(f"Modelo carregado com sucesso de: {caminho_modelo}")
             modelo = joblib.load(caminho_modelo)
             return modelo
         return None
@@ -82,4 +85,4 @@ def prever_intervalo(dados: RevisaoRequest):
         )
     df = pd.DataFrame([dados.dict()])
     previsao = mod.predict(df)[0]
-    return {int(round(previsao))}
+    return {"proximo_intervalo_dias": int(round(previsao))}
