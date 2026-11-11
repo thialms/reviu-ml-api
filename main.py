@@ -7,16 +7,27 @@ for mod in list(sys.modules.keys()):
 import os
 import joblib
 import pandas as pd
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Security, Depends
+from fastapi.security import APIKeyHeader
 from pydantic import BaseModel
 from azure.identity import DefaultAzureCredential
 from azure.ai.ml import MLClient
 
 app = FastAPI(title="Reviu ML API")
 modelo = None
-erro_detalhado = None  # Guarda a mensagem de erro para exibir no Swagger
+erro_detalhado = None
 
-def carregar_modelo_azure():
+api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+
+def validar_chave_api(api_key: str = Security(api_key_header)):
+    chave_esperada = os.getenv("API_SECRET_KEY")
+    if not chave_esperada:
+        raise HTTPException(status_code=500, detail="Chave de segurança não configurada no Azure.")
+    if api_key != chave_esperada:
+        raise HTTPException(status_code=403, detail="Acesso negado. Chave inválida.")
+    return api_key
+
+def obter_modelo():
     global modelo, erro_detalhado
     if modelo is not None:
         return modelo, None
@@ -58,11 +69,9 @@ def carregar_modelo_azure():
 
 @app.get("/")
 def health_check():
-    mod, err = carregar_modelo_azure()
     return {
         "status": "online",
-        "modelo_carregado": mod is not None,
-        "detalhe_erro": err
+        "modelo_carregado": modelo is not None,
     }
 
 class RevisaoRequest(BaseModel):
@@ -76,14 +85,11 @@ class RevisaoRequest(BaseModel):
     facilidade_atual: float
     nota_revisao: int
 
-@app.post("/prever_intervalo")
+@app.post("/prever_intervalo", dependencies=[Depends(validar_chave_api)])
 def prever_intervalo(dados: RevisaoRequest):
-    mod, err = carregar_modelo_azure()
+    mod, err = obter_modelo()
     if mod is None:
-        return {
-            "erro": "Falha ao carregar modelo",
-            "detalhe_azure_ml": err
-        }
+        raise HTTPException(status_code=500, detail=f"Falha ao carregar modelo: {err}")
     df = pd.DataFrame([dados.dict()])
     previsao = mod.predict(df)[0]
     return {"proximo_intervalo_dias": int(round(previsao))}
